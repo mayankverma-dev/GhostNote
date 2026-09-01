@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Minimal Notes</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+<style>
+  :root {
+    --bg-main: #18181a;
+    --bg-sidebar: #1d1d1f;
+    --bg-hover: rgba(255,255,255,0.06);
+    --bg-active: rgba(255,255,255,0.09);
+    --bg-input: rgba(255,255,255,0.04);
+    --border-color: rgba(255,255,255,0.08);
+    --text-main: #e4e4e5;
+    --text-muted: #85858a;
+    --text-faint: rgba(255,255,255,0.18);
+    --accent: #4fb3e8;
+    --accent-live: #34d399;
+    --danger: #f26d6d;
+    --radius-sm: 5px;
+    --radius-md: 8px;
+    --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: var(--font-family);
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+    font-size: 14px;
+  }
+
+  ::selection { background: rgba(79,179,232,0.3); }
+
+  /* Custom scrollbars everywhere, flush against the container edge */
+  .scrollable {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.16) transparent;
+  }
+  .scrollable::-webkit-scrollbar { width: 9px; height: 9px; }
+  .scrollable::-webkit-scrollbar-track { background: transparent; }
+  .scrollable::-webkit-scrollbar-thumb {
+    background-color: rgba(255,255,255,0.14);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollable::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.26); }
+
+  .app-container { display: flex; width: 100vw; height: 100vh; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 264px;
+    background-color: var(--bg-sidebar);
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+  .brand { font-weight: 600; font-size: 0.92rem; display: flex; align-items: center; gap: 8px; letter-spacing: -0.01em; }
+  .brand svg { color: var(--accent); }
+
+  .btn-new-note {
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 6px 11px;
+    border-radius: var(--radius-sm);
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .btn-new-note:hover { background: var(--bg-active); border-color: rgba(255,255,255,0.14); }
+  .btn-new-note:active { transform: scale(0.97); }
+
+  .notes-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .notes-empty {
+    padding: 24px 12px; color: var(--text-faint); font-size: 0.8rem; text-align: center; line-height: 1.5;
+  }
+  .note-item {
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    margin-bottom: 1px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    position: relative;
+    transition: background-color 0.12s ease;
+  }
+  .note-item:hover { background-color: var(--bg-hover); }
+  .note-item.active { background-color: var(--bg-active); }
+  .note-item.sharing::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent-live);
+    box-shadow: 0 0 0 3px rgba(52,211,153,0.15);
+  }
+  .note-item-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .note-item-title {
+    font-size: 0.85rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-main);
+  }
+  .note-item-title.untitled { color: var(--text-muted); font-weight: 400; }
+  .note-item-date { font-size: 0.71rem; color: var(--text-muted); }
+  .note-item-delete {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    opacity: 0; background: none; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 4px; border-radius: 4px; display: flex; transition: opacity 0.12s ease, color 0.12s ease;
+  }
+  .note-item:hover .note-item-delete { opacity: 1; }
+  .note-item-delete:hover { color: var(--danger); background: rgba(242,109,109,0.1); }
+
+  /* Main editor panel */
+  .editor-panel { flex: 1; display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+
+  .toolbar {
+    height: 50px;
+    padding: 0 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+  .save-status { font-size: 0.76rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .save-status svg { width: 13px; height: 13px; }
+  .save-status.saving svg { color: var(--text-muted); }
+  .save-status.saved svg { color: var(--accent-live); }
+
+  .toolbar-actions { display: flex; align-items: center; gap: 6px; }
+
+  .action-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+  .action-btn svg { width: 14px; height: 14px; }
+  .action-btn:hover { background: var(--bg-hover); color: var(--text-main); }
+  .action-btn.active { background: var(--bg-active); color: var(--text-main); border-color: var(--border-color); }
+  .action-btn.live-active {
+    color: var(--accent-live);
+    background: rgba(52,211,153,0.1);
+    border-color: rgba(52,211,153,0.25);
+  }
+  .action-btn.live-active:hover { background: rgba(52,211,153,0.16); }
+  .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Banners */
+  .share-banner {
+    padding: 9px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.82rem;
+    flex-shrink: 0;
+    gap: 12px;
+  }
+  .share-banner.viewer { background: rgba(79,179,232,0.08); border-bottom: 1px solid rgba(79,179,232,0.18); color: var(--accent); }
+  .share-banner.viewer.offline { background: rgba(242,109,109,0.08); border-bottom: 1px solid rgba(242,109,109,0.18); color: var(--danger); }
+  .share-banner.host { background: rgba(52,211,153,0.08); border-bottom: 1px solid rgba(52,211,153,0.18); color: var(--accent-live); }
+
+  .banner-text-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .banner-text-wrap span.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .banner-text-wrap svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  .share-banner-btn {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-main);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.12s ease;
+  }
+  .share-banner-btn:hover { background: rgba(255,255,255,0.16); }
+  .share-banner-btn.primary { background: var(--accent); border-color: var(--accent); color: #0c1116; }
+  .share-banner-btn.primary:hover { background: #63bfec; }
+
+  @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .pulsing { animation: pulse-dot 1.6s ease-in-out infinite; }
+
+  /* Editor scroll area — this is the ONLY scroll container, flush to the panel's right edge */
+  .editor-scroll { flex: 1; overflow-y: auto; min-height: 0; }
+  .editor-container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 48px 32px 96px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+
+  .title-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-main);
+    margin-bottom: 20px;
+    width: 100%;
+  }
+  .title-input::placeholder { color: var(--text-faint); }
+  .title-input:disabled { color: var(--text-muted); cursor: default; }
+
+  .content-textarea {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: var(--font-family);
+    font-size: 0.98rem;
+    line-height: 1.7;
+    color: var(--text-main);
+    resize: none;
+    flex: 1;
+    width: 100%;
+    min-height: 300px;
+  }
+  .content-textarea::placeholder { color: var(--text-faint); }
+  .content-textarea:disabled { color: var(--text-muted); cursor: default; }
+
+  .markdown-preview { flex: 1; font-size: 0.98rem; line-height: 1.7; color: var(--text-main); }
+  .markdown-preview h1 { font-size: 1.6rem; margin: 1.1rem 0 0.5rem; font-weight: 700; letter-spacing: -0.01em; }
+  .markdown-preview h2 { font-size: 1.3rem; margin: 1rem 0 0.5rem; font-weight: 700; }
+  .markdown-preview h3 { font-size: 1.1rem; margin: 0.9rem 0 0.4rem; font-weight: 600; }
+  .markdown-preview p { margin-bottom: 1rem; }
+  .markdown-preview ul, .markdown-preview ol { padding-left: 1.4rem; margin-bottom: 1rem; }
+  .markdown-preview li { margin-bottom: 0.3rem; }
+  .markdown-preview code { font-family: var(--font-mono); background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-size: 0.86em; }
+  .markdown-preview pre { background: #101012; padding: 14px; border-radius: var(--radius-md); overflow-x: auto; margin-bottom: 1rem; border: 1px solid var(--border-color); }
+  .markdown-preview pre code { background: none; padding: 0; }
+  .markdown-preview a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(79,179,232,0.35); }
+  .markdown-preview blockquote { border-left: 2px solid var(--border-color); padding-left: 12px; color: var(--text-muted); margin-bottom: 1rem; }
+  .markdown-preview img { max-width: 100%; border-radius: var(--radius-sm); }
+  .markdown-preview hr { border: none; border-top: 1px solid var(--border-color); margin: 1.5rem 0; }
+  .markdown-empty { color: var(--text-faint); font-style: italic; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 22px;
+    right: 22px;
+    background: #232326;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    font-size: 0.82rem;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    pointer-events: none;
+    z-index: 100;
+    max-width: 340px;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast svg { width: 15px; height: 15px; color: var(--accent); flex-shrink: 0; }
+
+  /* Focus visibility for accessibility */
+  button:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulsing { animation: none; }
+    * { transition: none !important; }
+  }
+
+  @media (max-width: 720px) {
+    .sidebar { position: fixed; z-index: 20; height: 100vh; transform: translateX(-100%); transition: transform 0.18s ease; }
+    .sidebar.open { transform: translateX(0); }
+    .editor-container { padding: 32px 20px 80px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app-container">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="brand">
+        <i data-lucide="notebook-pen" style="width:16px;height:16px;"></i>
+        <span>Notes</span>
+      </div>
+      <button class="btn-new-note" id="newNoteBtn">
+        <i data-lucide="plus" style="width:13px;height:13px;"></i> New
+      </button>
+    </div>
+    <div class="notes-list scrollable" id="notesList"></div>
+  </aside>
+
+  <main class="editor-panel" id="editorPanel">
+
+    <div class="share-banner viewer" id="viewerBanner" style="display:none;">
+      <span class="banner-text-wrap" id="viewerBannerText"></span>
+      <button class="share-banner-btn primary" id="importSharedBtn" style="display:none;">Import to my notes</button>
+    </div>
+
+    <div class="share-banner host" id="hostBanner" style="display:none;">
+      <span class="banner-text-wrap">
+        <i data-lucide="radio" class="pulsing" style="width:14px;height:14px;"></i>
+        <span class="truncate" id="hostBannerText">Live sharing active</span>
+      </span>
+      <span style="display:flex; gap:6px; flex-shrink:0;">
+        <button class="share-banner-btn" id="copyLinkBtn">Copy link</button>
+        <button class="share-banner-btn" id="stopShareBtn">Stop sharing</button>
+      </span>
+    </div>
+
+    <div class="toolbar" id="toolbar">
+      <div class="save-status saved" id="saveStatus">
+        <i data-lucide="check-circle" style="width:14px;height:14px;"></i><span>Saved</span>
+      </div>
+      <div class="toolbar-actions">
+        <button class="action-btn" id="togglePreviewBtn" title="Toggle preview (Ctrl+P)">
+          <i data-lucide="eye" style="width:14px;height:14px;"></i> Preview
+        </button>
+        <button class="action-btn" id="shareBtn" title="Share this note via a live link">
+          <i data-lucide="radio" style="width:14px;height:14px;"></i> Live share
+        </button>
+      </div>
+    </div>
+
+    <div class="editor-scroll scrollable" id="editorScroll">
+      <div class="editor-container" id="editorContainer">
+        <input type="text" class="title-input" id="noteTitle" placeholder="Untitled" autocomplete="off" />
+        <textarea class="content-textarea" id="noteContent" placeholder="Start typing in markdown…"></textarea>
+        <div class="markdown-preview" id="markdownPreview" style="display:none;"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast">
+  <i data-lucide="info"></i>
+  <span id="toastMsg"></span>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+  let notes = [];
+  let activeNoteId = null;
+  let isPreviewMode = false;
+  let autoSaveTimeout = null;
+
+  const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+  const TOPIC_ROOT = 'minimalnotesapp/v1';
+
+  // Host (sharing) state
+  const share = {
+    client: null,
+    roomId: null,
+    active: false,
+    noteId: null,
+    publishTimer: null,
+  };
+
+  // Viewer state
+  const viewer = {
+    client: null,
+    roomId: null,
+    active: false,
+    connected: false,
+  };
+
+  // ---------------------------------------------------------------------
+  // DOM references
+  // ---------------------------------------------------------------------
+  const notesListEl = document.getElementById('notesList');
+  const noteTitleEl = document.getElementById('noteTitle');
+  const noteContentEl = document.getElementById('noteContent');
+  const markdownPreviewEl = document.getElementById('markdownPreview');
+  const saveStatusEl = document.getElementById('saveStatus');
+  const togglePreviewBtn = document.getElementById('togglePreviewBtn');
+  const newNoteBtn = document.getElementById('newNoteBtn');
+  const editorScrollEl = document.getElementById('editorScroll');
+
+  const shareBtn = document.getElementById('shareBtn');
+  const hostBanner = document.getElementById('hostBanner');
+  const hostBannerText = document.getElementById('hostBannerText');
+  const stopShareBtn = document.getElementById('stopShareBtn');
+  const copyLinkBtn = document.getElementById('copyLinkBtn');
+
+  const viewerBanner = document.getElementById('viewerBanner');
+  const viewerBannerText = document.getElementById('viewerBannerText');
+  const importSharedBtn = document.getElementById('importSharedBtn');
+
+  const toastEl = document.getElementById('toast');
+  const toastMsg = document.getElementById('toastMsg');
+
+  // ---------------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------------
+  function init() {
+    lucide.createIcons();
+    loadNotesFromStorage();
+
+    if (window.location.hash.startsWith('#live=')) {
+      const roomId = window.location.hash.replace('#live=', '').trim();
+      if (roomId) connectAsViewer(roomId);
+    } else if (notes.length === 0) {
+      createNewNote(
+        'Welcome to Minimal Notes',
+        'A fast, distraction-free place for markdown notes.\n\n### Live share\nClick **Live share** to generate a short link. Keep this tab open — anyone with the link sees your note update in real time, including when you switch to a different note.\n\n### Markdown\nUse the **Preview** button (or Ctrl/Cmd+P) to render markdown as you write.'
+      );
+    } else {
+      selectNote(notes[0].id);
+    }
+
+    setupEventListeners();
+  }
+
+  // ---------------------------------------------------------------------
+  // Storage
+  // ---------------------------------------------------------------------
+  function loadNotesFromStorage() {
+    const stored = localStorage.getItem('minimal_notes_data');
+    if (stored) {
+      try { notes = JSON.parse(stored); } catch (e) { notes = []; }
+    }
+  }
+
+  function saveNotesToStorage() {
+    if (viewer.active) return;
+    localStorage.setItem('minimal_notes_data', JSON.stringify(notes));
+    setSaveStatus('saved');
+  }
+
+  function setSaveStatus(state) {
+    saveStatusEl.classList.remove('saved', 'saving');
+    saveStatusEl.classList.add(state);
+    const icon = state === 'saving' ? 'loader' : 'check-circle';
+    const label = state === 'saving' ? 'Saving…' : 'Saved';
+    saveStatusEl.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px;" class="${state === 'saving' ? 'pulsing' : ''}"></i><span>${label}</span>`;
+    lucide.createIcons();
+  }
+
+  // ---------------------------------------------------------------------
+  // Notes CRUD
+  // ---------------------------------------------------------------------
+  function createNewNote(title = '', content = '') {
+    const note = {
+      id: 'note_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      title,
+      content,
+      updatedAt: new Date().toISOString(),
+    };
+    notes.unshift(note);
+    saveNotesToStorage();
+    renderSidebar();
+    selectNote(note.id);
+  }
+
+  function selectNote(id) {
+    if (viewer.active) leaveSharedView();
+
+    activeNoteId = id;
+    const note = notes.find(n => n.id === id);
+    if (!note) return;
+
+    noteTitleEl.value = note.title;
+    noteContentEl.value = note.content;
+    noteTitleEl.disabled = false;
+    noteContentEl.disabled = false;
+
+    if (isPreviewMode) renderMarkdown();
+    renderSidebar();
+    editorScrollEl.scrollTop = 0;
+
+    // If we're currently live-sharing, following the active note is the point:
+    // switching notes should immediately start sharing the newly opened one.
+    if (share.active) {
+      share.noteId = id;
+      publishShareData();
+      updateHostBanner();
+    }
+  }
+
+  function deleteNote(id, event) {
+    event.stopPropagation();
+    const wasShared = share.active && share.noteId === id;
+    notes = notes.filter(n => n.id !== id);
+    saveNotesToStorage();
+
+    if (wasShared) stopShare();
+
+    if (activeNoteId === id) {
+      if (notes.length > 0) selectNote(notes[0].id);
+      else createNewNote();
+    } else {
+      renderSidebar();
+    }
+    showToast('Note deleted');
+  }
+
+  function renderSidebar() {
+    if (notes.length === 0) {
+      notesListEl.innerHTML = '<div class="notes-empty">No notes yet.<br>Click "New" to create one.</div>';
+      return;
+    }
+    notesListEl.innerHTML = '';
+    notes.forEach(note => {
+      const isActive = note.id === activeNoteId && !viewer.active;
+      const isSharing = share.active && share.noteId === note.id;
+      const item = document.createElement('div');
+      item.className = `note-item ${isActive ? 'active' : ''} ${isSharing ? 'sharing' : ''}`;
+      const displayTitle = note.title.trim() ? escapeHtml(note.title) : 'Untitled';
+      const dateStr = new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+      item.innerHTML = `
+        <div class="note-item-row">
+          <div class="note-item-title ${note.title.trim() ? '' : 'untitled'}">${displayTitle}</div>
+          <button class="note-item-delete" title="Delete note" aria-label="Delete note">
+            <i data-lucide="trash-2" style="width:13px;height:13px;"></i>
+          </button>
+        </div>
+        <div class="note-item-date">${dateStr}${isSharing ? ' · Live' : ''}</div>
+      `;
+      item.addEventListener('click', () => selectNote(note.id));
+      item.querySelector('.note-item-delete').addEventListener('click', e => deleteNote(note.id, e));
+      notesListEl.appendChild(item);
+    });
+    lucide.createIcons();
+  }
+
+  function handleInput() {
+    if (viewer.active) return;
+    setSaveStatus('saving');
+    clearTimeout(autoSaveTimeout);
+    autoSaveTimeout = setTimeout(() => {
+      const note = notes.find(n => n.id === activeNoteId);
+      if (note) {
+        note.title = noteTitleEl.value;
+        note.content = noteContentEl.value;
+        note.updatedAt = new Date().toISOString();
+        saveNotesToStorage();
+        renderSidebar();
+      }
+    }, 300);
+
+    if (share.active && share.noteId === activeNoteId) {
+      scheduleShareUpdate();
+    }
+  }
+
+  function togglePreview() {
+    isPreviewMode = !isPreviewMode;
+    if (isPreviewMode) {
+      renderMarkdown();
+      noteContentEl.style.display = 'none';
+      markdownPreviewEl.style.display = 'block';
+      togglePreviewBtn.classList.add('active');
+      togglePreviewBtn.innerHTML = '<i data-lucide="edit-3" style="width:14px;height:14px;"></i> Edit';
+    } else {
+      noteContentEl.style.display = 'block';
+      markdownPreviewEl.style.display = 'none';
+      togglePreviewBtn.classList.remove('active');
+      togglePreviewBtn.innerHTML = '<i data-lucide="eye" style="width:14px;height:14px;"></i> Preview';
+    }
+    lucide.createIcons();
+  }
+
+  function renderMarkdown() {
+    const raw = noteContentEl.value;
+    markdownPreviewEl.innerHTML = raw.trim()
+      ? marked.parse(raw)
+      : '<p class="markdown-empty">Nothing to preview yet.</p>';
+  }
+
+  // ---------------------------------------------------------------------
+  // Live share — host side
+  //
+  // Protocol: for a room id R, three retained/plain MQTT topics are used:
+  //   minimalnotesapp/v1/R/status    retained  { active: boolean }
+  //   minimalnotesapp/v1/R/data      retained  { title, content, ts }
+  //   minimalnotesapp/v1/R/presence  plain     viewer "joined" pings
+  //
+  // Retained messages mean a viewer who opens the link late still gets the
+  // current note immediately. A last-will status message means viewers are
+  // told automatically if the host's tab closes or loses connection.
+  // ---------------------------------------------------------------------
+  function toggleLiveShare() {
+    if (share.active) { stopShare(); return; }
+    startShare();
+  }
+
+  function startShare() {
+    showToast('Connecting…');
+    share.roomId = generateRoomId();
+    share.noteId = activeNoteId;
+    const base = `${TOPIC_ROOT}/${share.roomId}`;
+
+    let client;
+    try {
+      client = mqtt.connect(MQTT_BROKER, {
+        will: { topic: `${base}/status`, payload: JSON.stringify({ active: false }), qos: 1, retain: true },
+      });
+    } catch (e) {
+      showToast('Could not start live share');
+      return;
+    }
+    share.client = client;
+
+    client.on('connect', () => {
+      share.active = true;
+      client.subscribe(`${base}/presence`);
+      client.publish(`${base}/status`, JSON.stringify({ active: true }), { qos: 1, retain: true });
+      publishShareData();
+
+      const link = `${window.location.origin}${window.location.pathname}#live=${share.roomId}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link).catch(() => {});
+      }
+      showToast(`Link copied — sharing "${currentTitleOrUntitled()}"`);
+      updateHostBanner();
+      renderSidebar();
+    });
+
+    client.on('message', (topic) => {
+      if (topic === `${base}/presence`) {
+        showToast('A viewer connected');
+      }
+    });
+
+    client.on('error', () => {
+      showToast('Live share connection error');
+    });
+  }
+
+  function scheduleShareUpdate() {
+    clearTimeout(share.publishTimer);
+    share.publishTimer = setTimeout(publishShareData, 400);
+  }
+
+  function publishShareData() {
+    if (!share.active || !share.client) return;
+    const base = `${TOPIC_ROOT}/${share.roomId}`;
+    const payload = JSON.stringify({
+      title: noteTitleEl.value,
+      content: noteContentEl.value,
+      ts: Date.now(),
+    });
+    share.client.publish(`${base}/data`, payload, { qos: 1, retain: true });
+  }
+
+  function stopShare() {
+    if (!share.active || !share.client) return;
+    const base = `${TOPIC_ROOT}/${share.roomId}`;
+    const client = share.client;
+    clearTimeout(share.publishTimer);
+    client.publish(`${base}/status`, JSON.stringify({ active: false }), { qos: 1, retain: true }, () => {
+      client.end(true);
+    });
+    share.active = false;
+    share.client = null;
+    share.roomId = null;
+    share.noteId = null;
+    updateHostBanner();
+    renderSidebar();
+    showToast('Live sharing stopped');
+  }
+
+  function updateHostBanner() {
+    if (share.active) {
+      hostBanner.style.display = 'flex';
+      hostBannerText.textContent = `Live · sharing "${currentTitleOrUntitled()}"`;
+      shareBtn.classList.add('live-active');
+      shareBtn.innerHTML = '<i data-lucide="check" style="width:14px;height:14px;"></i> Sharing';
+    } else {
+      hostBanner.style.display = 'none';
+      shareBtn.classList.remove('live-active');
+      shareBtn.innerHTML = '<i data-lucide="radio" style="width:14px;height:14px;"></i> Live share';
+    }
+    lucide.createIcons();
+  }
+
+  function currentTitleOrUntitled() {
+    return noteTitleEl.value.trim() || 'Untitled';
+  }
+
+  // ---------------------------------------------------------------------
+  // Live share — viewer side
+  // ---------------------------------------------------------------------
+  function connectAsViewer(roomId) {
+    if (share.active) stopShare();
+
+    viewer.roomId = roomId;
+    viewer.active = true;
+    viewer.connected = false;
+    activeNoteId = null;
+    renderSidebar();
+
+    viewerBanner.classList.remove('offline');
+    viewerBanner.style.display = 'flex';
+    viewerBannerText.innerHTML = '<i data-lucide="loader" class="pulsing"></i><span class="truncate">Connecting to host…</span>';
+    importSharedBtn.style.display = 'none';
+
+    noteTitleEl.value = '';
+    noteContentEl.value = '';
+    noteTitleEl.placeholder = 'Waiting for host…';
+    noteTitleEl.disabled = true;
+    noteContentEl.disabled = true;
+
+    const base = `${TOPIC_ROOT}/${roomId}`;
+    let client;
+    try {
+      client = mqtt.connect(MQTT_BROKER);
+    } catch (e) {
+      showViewerOffline();
+      return;
+    }
+    viewer.client = client;
+
+    client.on('connect', () => {
+      client.subscribe([`${base}/data`, `${base}/status`]);
+      client.publish(`${base}/presence`, '1');
+      setTimeout(() => {
+        if (viewer.active && !viewer.connected) showViewerOffline();
+      }, 8000);
+    });
+
+    client.on('message', (topic, message) => {
+      if (!viewer.active) return;
+      let data;
+      try { data = JSON.parse(message.toString()); } catch (e) { return; }
+
+      if (topic === `${base}/status`) {
+        if (data.active === false) showViewerOffline();
+        return;
+      }
+
+      if (topic === `${base}/data`) {
+        viewer.connected = true;
+        noteTitleEl.disabled = false;
+        noteContentEl.disabled = false;
+        noteTitleEl.value = data.title || '';
+        noteContentEl.value = data.content || '';
+        if (isPreviewMode) renderMarkdown();
+
+        viewerBanner.classList.remove('offline');
+        viewerBannerText.innerHTML =
+          '<i data-lucide="radio" class="pulsing"></i>' +
+          `<span class="truncate">Live · read-only view of "${escapeHtml(data.title || 'Untitled')}"</span>`;
+        importSharedBtn.style.display = 'inline-block';
+        lucide.createIcons();
+      }
+    });
+
+    client.on('error', () => showViewerOffline());
+  }
+
+  function showViewerOffline() {
+    viewerBanner.classList.add('offline');
+    viewerBannerText.innerHTML = '<i data-lucide="alert-circle"></i><span class="truncate">Host is offline or stopped sharing</span>';
+    if (!viewer.connected) {
+      noteTitleEl.placeholder = 'This link is no longer live';
+    }
+    lucide.createIcons();
+  }
+
+  function importSharedNote() {
+    const title = noteTitleEl.value;
+    const content = noteContentEl.value;
+    leaveSharedView();
+    createNewNote(title, content);
+    showToast('Imported to your notes');
+  }
+
+  function leaveSharedView() {
+    if (viewer.client) {
+      viewer.client.end(true);
+      viewer.client = null;
+    }
+    viewer.active = false;
+    viewer.connected = false;
+    viewer.roomId = null;
+    viewerBanner.style.display = 'none';
+    if (window.location.hash.startsWith('#live=')) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Utilities
+  // ---------------------------------------------------------------------
+  function generateRoomId() {
+    return Math.random().toString(36).slice(2, 7).toUpperCase();
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function showToast(message) {
+    toastMsg.textContent = message;
+    toastEl.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toastEl.classList.remove('show'), 3000);
+  }
+
+  // ---------------------------------------------------------------------
+  // Events
+  // ---------------------------------------------------------------------
+  function setupEventListeners() {
+    noteTitleEl.addEventListener('input', handleInput);
+    noteContentEl.addEventListener('input', handleInput);
+
+    newNoteBtn.addEventListener('click', () => createNewNote());
+    togglePreviewBtn.addEventListener('click', togglePreview);
+
+    shareBtn.addEventListener('click', toggleLiveShare);
+    stopShareBtn.addEventListener('click', stopShare);
+    copyLinkBtn.addEventListener('click', () => {
+      if (!share.active) return;
+      const link = `${window.location.origin}${window.location.pathname}#live=${share.roomId}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link).then(() => showToast('Link copied'));
+      }
+    });
+    importSharedBtn.addEventListener('click', importSharedNote);
+
+    window.addEventListener('keydown', (e) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!viewer.active) { saveNotesToStorage(); showToast('Saved'); }
+      }
+      if (mod && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        togglePreview();
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (share.active && share.client) {
+        const base = `${TOPIC_ROOT}/${share.roomId}`;
+        try {
+          share.client.publish(`${base}/status`, JSON.stringify({ active: false }), { qos: 1, retain: true });
+        } catch (e) { /* best effort */ }
+      }
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>
