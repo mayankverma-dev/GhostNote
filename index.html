@@ -47,7 +47,7 @@
 
   ::selection { background: rgba(79,179,232,0.3); }
 
-  /* Custom scrollbars everywhere, flush against the container edge */
+  /* Custom scrollbars */
   .scrollable {
     scrollbar-width: thin;
     scrollbar-color: rgba(255,255,255,0.16) transparent;
@@ -103,9 +103,7 @@
   .btn-new-note:active { transform: scale(0.97); }
 
   .notes-list { flex: 1; overflow-y: auto; padding: 8px; }
-  .notes-empty {
-    padding: 24px 12px; color: var(--text-faint); font-size: 0.8rem; text-align: center; line-height: 1.5;
-  }
+  .notes-empty { padding: 24px 12px; color: var(--text-faint); font-size: 0.8rem; text-align: center; line-height: 1.5; }
   .note-item {
     padding: 9px 12px;
     border-radius: var(--radius-sm);
@@ -186,11 +184,7 @@
   .action-btn svg { width: 14px; height: 14px; }
   .action-btn:hover { background: var(--bg-hover); color: var(--text-main); }
   .action-btn.active { background: var(--bg-active); color: var(--text-main); border-color: var(--border-color); }
-  .action-btn.live-active {
-    color: var(--accent-live);
-    background: rgba(52,211,153,0.1);
-    border-color: rgba(52,211,153,0.25);
-  }
+  .action-btn.live-active { color: var(--accent-live); background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.25); }
   .action-btn.live-active:hover { background: rgba(52,211,153,0.16); }
   .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -207,7 +201,6 @@
   .share-banner.viewer { background: rgba(79,179,232,0.08); border-bottom: 1px solid rgba(79,179,232,0.18); color: var(--accent); }
   .share-banner.viewer.offline { background: rgba(242,109,109,0.08); border-bottom: 1px solid rgba(242,109,109,0.18); color: var(--danger); }
   .share-banner.host { background: rgba(52,211,153,0.08); border-bottom: 1px solid rgba(52,211,153,0.18); color: var(--accent-live); }
-
   .banner-text-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .banner-text-wrap span.truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .banner-text-wrap svg { width: 14px; height: 14px; flex-shrink: 0; }
@@ -231,7 +224,7 @@
   @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .pulsing { animation: pulse-dot 1.6s ease-in-out infinite; }
 
-  /* Editor scroll area — this is the ONLY scroll container, flush to the panel's right edge */
+  /* Editor scroll area */
   .editor-scroll { flex: 1; overflow-y: auto; min-height: 0; }
   .editor-container {
     max-width: 760px;
@@ -254,7 +247,14 @@
     width: 100%;
   }
   .title-input::placeholder { color: var(--text-faint); }
-  .title-input:disabled { color: var(--text-muted); cursor: default; }
+  
+  /* Retain bright color in preview mode, but disable pointer events */
+  .title-input:disabled { 
+    color: var(--text-main); 
+    -webkit-text-fill-color: var(--text-main); 
+    opacity: 1; 
+    cursor: default; 
+  }
 
   .content-textarea {
     background: transparent;
@@ -313,7 +313,6 @@
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast svg { width: 15px; height: 15px; color: var(--accent); flex-shrink: 0; }
 
-  /* Focus visibility for accessibility */
   button:focus-visible, input:focus-visible, textarea:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
@@ -348,7 +347,6 @@
   </aside>
 
   <main class="editor-panel" id="editorPanel">
-
     <div class="share-banner viewer" id="viewerBanner" style="display:none;">
       <span class="banner-text-wrap" id="viewerBannerText"></span>
       <button class="share-banner-btn primary" id="importSharedBtn" style="display:none;">Import to my notes</button>
@@ -398,9 +396,6 @@
 (function () {
   'use strict';
 
-  // ---------------------------------------------------------------------
-  // State
-  // ---------------------------------------------------------------------
   let notes = [];
   let activeNoteId = null;
   let isPreviewMode = false;
@@ -409,26 +404,9 @@
   const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
   const TOPIC_ROOT = 'minimalnotesapp/v1';
 
-  // Host (sharing) state
-  const share = {
-    client: null,
-    roomId: null,
-    active: false,
-    noteId: null,
-    publishTimer: null,
-  };
+  const share = { client: null, roomId: null, active: false, noteId: null, publishTimer: null };
+  const viewer = { client: null, roomId: null, active: false, connected: false };
 
-  // Viewer state
-  const viewer = {
-    client: null,
-    roomId: null,
-    active: false,
-    connected: false,
-  };
-
-  // ---------------------------------------------------------------------
-  // DOM references
-  // ---------------------------------------------------------------------
   const notesListEl = document.getElementById('notesList');
   const noteTitleEl = document.getElementById('noteTitle');
   const noteContentEl = document.getElementById('noteContent');
@@ -451,9 +429,6 @@
   const toastEl = document.getElementById('toast');
   const toastMsg = document.getElementById('toastMsg');
 
-  // ---------------------------------------------------------------------
-  // Init
-  // ---------------------------------------------------------------------
   function init() {
     lucide.createIcons();
     loadNotesFromStorage();
@@ -469,13 +444,9 @@
     } else {
       selectNote(notes[0].id);
     }
-
     setupEventListeners();
   }
 
-  // ---------------------------------------------------------------------
-  // Storage
-  // ---------------------------------------------------------------------
   function loadNotesFromStorage() {
     const stored = localStorage.getItem('minimal_notes_data');
     if (stored) {
@@ -498,9 +469,6 @@
     lucide.createIcons();
   }
 
-  // ---------------------------------------------------------------------
-  // Notes CRUD
-  // ---------------------------------------------------------------------
   function createNewNote(title = '', content = '') {
     const note = {
       id: 'note_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
@@ -511,10 +479,13 @@
     notes.unshift(note);
     saveNotesToStorage();
     renderSidebar();
-    selectNote(note.id);
+
+    // Open entirely new blank notes in Edit Mode. Open populated notes (like the welcome note) in Preview Mode.
+    const isNewEmptyNote = (title === '' && content === '');
+    selectNote(note.id, isNewEmptyNote);
   }
 
-  function selectNote(id) {
+  function selectNote(id, forceEdit = false) {
     if (viewer.active) leaveSharedView();
 
     activeNoteId = id;
@@ -523,15 +494,24 @@
 
     noteTitleEl.value = note.title;
     noteContentEl.value = note.content;
-    noteTitleEl.disabled = false;
-    noteContentEl.disabled = false;
 
-    if (isPreviewMode) renderMarkdown();
+    // Logic for setting preview vs edit mode on selection
+    if (forceEdit && isPreviewMode) {
+      togglePreview(); // Switch to edit
+    } else if (!forceEdit && !isPreviewMode) {
+      togglePreview(); // Switch to preview (default action for clicking sidebar)
+    } else if (isPreviewMode) {
+      renderMarkdown(); // Update renderer if already in preview
+    }
+
+    // Apply strict access locks based on active state
+    const readOnly = isPreviewMode || viewer.active;
+    noteTitleEl.disabled = readOnly;
+    noteContentEl.disabled = readOnly;
+
     renderSidebar();
     editorScrollEl.scrollTop = 0;
 
-    // If we're currently live-sharing, following the active note is the point:
-    // switching notes should immediately start sharing the newly opened one.
     if (share.active) {
       share.noteId = id;
       publishShareData();
@@ -620,6 +600,12 @@
       togglePreviewBtn.classList.remove('active');
       togglePreviewBtn.innerHTML = '<i data-lucide="eye" style="width:14px;height:14px;"></i> Preview';
     }
+    
+    // Title locked when previewing or viewing
+    const readOnly = isPreviewMode || viewer.active;
+    noteTitleEl.disabled = readOnly;
+    noteContentEl.disabled = readOnly;
+
     lucide.createIcons();
   }
 
@@ -630,18 +616,6 @@
       : '<p class="markdown-empty">Nothing to preview yet.</p>';
   }
 
-  // ---------------------------------------------------------------------
-  // Live share — host side
-  //
-  // Protocol: for a room id R, three retained/plain MQTT topics are used:
-  //   minimalnotesapp/v1/R/status    retained  { active: boolean }
-  //   minimalnotesapp/v1/R/data      retained  { title, content, ts }
-  //   minimalnotesapp/v1/R/presence  plain     viewer "joined" pings
-  //
-  // Retained messages mean a viewer who opens the link late still gets the
-  // current note immediately. A last-will status message means viewers are
-  // told automatically if the host's tab closes or loses connection.
-  // ---------------------------------------------------------------------
   function toggleLiveShare() {
     if (share.active) { stopShare(); return; }
     startShare();
@@ -680,14 +654,10 @@
     });
 
     client.on('message', (topic) => {
-      if (topic === `${base}/presence`) {
-        showToast('A viewer connected');
-      }
+      if (topic === `${base}/presence`) showToast('A viewer connected');
     });
 
-    client.on('error', () => {
-      showToast('Live share connection error');
-    });
+    client.on('error', () => showToast('Live share connection error'));
   }
 
   function scheduleShareUpdate() {
@@ -698,11 +668,7 @@
   function publishShareData() {
     if (!share.active || !share.client) return;
     const base = `${TOPIC_ROOT}/${share.roomId}`;
-    const payload = JSON.stringify({
-      title: noteTitleEl.value,
-      content: noteContentEl.value,
-      ts: Date.now(),
-    });
+    const payload = JSON.stringify({ title: noteTitleEl.value, content: noteContentEl.value, ts: Date.now() });
     share.client.publish(`${base}/data`, payload, { qos: 1, retain: true });
   }
 
@@ -741,9 +707,6 @@
     return noteTitleEl.value.trim() || 'Untitled';
   }
 
-  // ---------------------------------------------------------------------
-  // Live share — viewer side
-  // ---------------------------------------------------------------------
   function connectAsViewer(roomId) {
     if (share.active) stopShare();
 
@@ -794,8 +757,6 @@
 
       if (topic === `${base}/data`) {
         viewer.connected = true;
-        noteTitleEl.disabled = false;
-        noteContentEl.disabled = false;
         noteTitleEl.value = data.title || '';
         noteContentEl.value = data.content || '';
         if (isPreviewMode) renderMarkdown();
@@ -843,18 +804,12 @@
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Utilities
-  // ---------------------------------------------------------------------
   function generateRoomId() {
     return Math.random().toString(36).slice(2, 7).toUpperCase();
   }
 
   function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   function showToast(message) {
@@ -864,9 +819,6 @@
     showToast._t = setTimeout(() => toastEl.classList.remove('show'), 3000);
   }
 
-  // ---------------------------------------------------------------------
-  // Events
-  // ---------------------------------------------------------------------
   function setupEventListeners() {
     noteTitleEl.addEventListener('input', handleInput);
     noteContentEl.addEventListener('input', handleInput);
